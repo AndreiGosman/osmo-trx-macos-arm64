@@ -18,7 +18,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
-#include <malloc.h>
+#include <stdlib.h>
 #include <iostream>
 #include <algorithm>
 
@@ -55,8 +55,12 @@ void Resampler::initFilters(float bw)
 	 * real only and must be 16-byte memory aligned for SSE usage.
 	 */
 	auto proto = vector<float>(p * filt_len);
-	for (auto &part : partitions)
-		part = (complex<float> *) memalign(16, filt_len * sizeof(complex<float>));
+	for (auto &part : partitions) {
+		void *buf;
+		if (posix_memalign(&buf, 16, filt_len * sizeof(complex<float>)))
+			buf = NULL;
+		part = (complex<float> *) buf;
+	}
 
 	/*
 	 * Generate the prototype filter with a Blackman-harris window.

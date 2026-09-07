@@ -21,7 +21,7 @@
  * See the COPYING file in the main directory for details.
  */
 
-#include <malloc.h>
+#include <stdlib.h>
 #include <math.h>
 #include <assert.h>
 #include <string.h>
@@ -88,8 +88,10 @@ bool ChannelizerBase::initFilters()
 	}
 
 	for (size_t i = 0; i < m; i++) {
-		subFilters[i] = (float *)
-				memalign(16, hLen * 2 * sizeof(float));
+		void *buf;
+		if (posix_memalign(&buf, 16, hLen * 2 * sizeof(float)))
+			buf = NULL;
+		subFilters[i] = (float *) buf;
 	}
 
 	/*

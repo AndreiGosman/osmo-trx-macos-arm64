@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  */
 
-#include <malloc.h>
+#include <stdlib.h>
 #include <string.h>
 #include <mult.h>
 

@@ -13,7 +13,7 @@
  * Lesser General Public License for more details.
  */
 
-#include <malloc.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include "convolve_sse_3.h"

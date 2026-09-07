@@ -13,7 +13,7 @@
  * Lesser General Public License for more details.
  */
 
-#include <malloc.h>
+#include <stdlib.h>
 #include <string.h>
 #include "convert.h"
 #include "convert_sse_3.h"

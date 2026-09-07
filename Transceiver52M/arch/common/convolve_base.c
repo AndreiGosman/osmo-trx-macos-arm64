@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  */
 
-#include <malloc.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -142,7 +142,10 @@ int base_convolve_complex(const float *x, int x_len,
 void *convolve_h_alloc(size_t len)
 {
 #ifdef HAVE_SSE3
-	return memalign(16, len * 2 * sizeof(float));
+	void *buf;
+	if (posix_memalign(&buf, 16, len * 2 * sizeof(float)))
+		return NULL;
+	return buf;
 #else
 	return malloc(len * 2 * sizeof(float));
 #endif
