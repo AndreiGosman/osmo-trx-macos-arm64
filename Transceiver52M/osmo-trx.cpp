@@ -573,7 +573,13 @@ static int set_sched_rr(unsigned int prio)
 	LOG(INFO) << "Setting SCHED_RR priority " << param.sched_priority
 		  << ". This setting is DEPRECATED, please use 'policy rr " << param.sched_priority
 		  << "' under the 'sched' VTY node instead.";
+#ifdef __linux__
 	rc = sched_setscheduler(getpid(), SCHED_RR, &param);
+#else
+	/* sched_setscheduler(2) is Linux only. Elsewhere set the policy on
+	 * the calling thread, which is the main thread at this point. */
+	rc = pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+#endif
 	if (rc != 0) {
 		LOG(ERROR) << "Config: Setting SCHED_RR failed";
 		return -1;
