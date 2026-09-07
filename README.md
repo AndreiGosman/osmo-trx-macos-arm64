@@ -14,7 +14,7 @@ Upstream README preserved as [README.upstream.md](README.upstream.md).
 
 ## Prerequisites
 
-- [libosmocore](https://github.com/AndreiGosman/libosmocore-macos-arm64) >= v0.2.3
+- [libosmocore](https://github.com/AndreiGosman/libosmocore-macos-arm64) >= v0.2.3 to build, >= v0.2.4 to run under a BTS (see below)
 - UHD >= 4.0 with the B2xx images (Homebrew: `brew install uhd`, then
   `uhd_images_downloader` if the images are missing)
 - Boost (Homebrew: `brew install boost`; UHD pulls it in)
@@ -27,6 +27,15 @@ stubbed only the initialiser; osmo-trx is the first daemon in this series
 that calls `osmo_cpu_sched_vty_apply_localthread()` from its worker
 threads, and against v0.2.2 `osmo-trx-uhd` fails to link with that symbol
 undefined.
+
+libosmocore v0.2.4 is needed as soon as osmo-bts-trx sends POWERON. The
+rate counter timers in `CommonLibs/trx_rate_ctr.cpp` disarm their
+timerfd from the read callback without a `read()`; the Darwin timerfd
+emulation up to v0.2.3 left the descriptor readable in that case, so the
+main thread spun at 100 % CPU and logged "Main thread is updating
+Transceiver counters" about 260000 times per second. v0.2.4 makes
+`timerfd_settime()` reset the pending count as Linux does. The fix is in
+`libosmocore.dylib`; this daemon does not need to be rebuilt.
 
 ## Build
 
@@ -114,8 +123,10 @@ device that hangs in the FX3 firmware load (it then shows on USB as
 `WestBridge` 0x2500:0x0020) blocks `uhd_usrp_probe` the same way, and a
 replug clears it.
 
-A full transceiver loop needs osmo-bts-trx, which is the next port in
-the series.
+The full loop with osmo-bts-trx and osmo-bsc is documented in the
+[osmo-bts port](https://github.com/AndreiGosman/osmo-bts-macos-arm64):
+POWERON acknowledged, 26 MHz master clock held through 2.5 minutes of
+streaming, no device underrun, this daemon at 37 % CPU on an M5 Pro.
 
 ## Patches applied
 
