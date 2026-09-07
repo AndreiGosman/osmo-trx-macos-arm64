@@ -1,78 +1,182 @@
-About OsmoTRX
-=============
+# osmo-trx for macOS ARM64
 
-OsmoTRX is a software-defined radio transceiver that implements the Layer 1
-physical layer of a BTS comprising the following 3GPP specifications:
+[osmo-trx](https://osmocom.org/projects/osmo-trx) port to macOS ARM64
+(Apple Silicon), Darwin 26+. Osmocom GSM transceiver: the software PHY
+between osmo-bts-trx and an SDR. This port builds the UHD backend,
+`osmo-trx-uhd`, for Ettus B2xx class devices such as the LibreSDR B220.
 
-* TS 05.01 *Physical layer on the radio path*
-* TS 05.02 *Multiplexing and Multiple Access on the Radio Path*
-* TS 05.04 *Modulation*
-* TS 05.10 *Radio subsystem synchronization*
+Upstream version: 1.8.0. Eight patches applied, five in the build system
+and three in the daemon. Testsuite on macOS 26.6.2, Apple M5 Pro, UHD
+4.10.0.0 from Homebrew: 7 pass, 1 skipped (LMSDeviceTest, the LimeSuite
+backend is not built), 0 fail.
 
-OsmoTRX is originally based on the transceiver code from the
-[OpenBTS](https://osmocom.org/projects/osmobts/wiki/OpenBTS) project, but setup
-to operate independently with the purpose of using with non-OpenBTS software and
-projects, specifically within the Osmocom stack.  Used together with
-[OsmoBTS](https://osmocom.org/projects/osmobts/wiki) you can get a pretty
-standard GSM/GPRS/EGPRS BTS with Abis interface as per the relevant 3GPP specifications.
+Upstream README preserved as [README.upstream.md](README.upstream.md).
 
-Homepage
---------
+## Prerequisites
 
-The official homepage of the project is
-<https://osmocom.org/projects/osmotrx/wiki/OsmoTRX>
+- [libosmocore](https://github.com/AndreiGosman/libosmocore-macos-arm64) >= v0.2.3
+- UHD >= 4.0 with the B2xx images (Homebrew: `brew install uhd`, then
+  `uhd_images_downloader` if the images are missing)
+- Boost (Homebrew: `brew install boost`; UHD pulls it in)
+- FFTW single precision (Homebrew: `brew install fftw`); the multi-ARFCN
+  code is enabled by default upstream and needs `fftw3f`
 
-GIT Repository
---------------
+libosmocore v0.2.3 is a hard requirement. Its `cpu_sched_vty.c` is Linux
+only and the port stubs the two public functions of that file. v0.2.2
+stubbed only the initialiser; osmo-trx is the first daemon in this series
+that calls `osmo_cpu_sched_vty_apply_localthread()` from its worker
+threads, and against v0.2.2 `osmo-trx-uhd` fails to link with that symbol
+undefined.
 
-You can clone from the official osmo-trx.git repository using
+## Build
 
-        git clone https://gitea.osmocom.org/cellular-infrastructure/osmo-trx
+```bash
+git clone https://github.com/AndreiGosman/osmo-trx-macos-arm64.git
+cd osmo-trx-macos-arm64
+autoreconf -fi
+mkdir -p build && cd build
+../configure --prefix=$HOME/sdr-lab/local --with-uhd
+make -j$(sysctl -n hw.ncpu)
+make check
+make install
+```
 
-There is a web interface at <https://gitea.osmocom.org/cellular-infrastructure/osmo-trx>
+All dependencies are found through pkg-config; the prefix and the
+Homebrew directories have to be on `PKG_CONFIG_PATH`. `--disable-doxygen`
+is not an osmo-trx option. The other backends (`--with-lms`,
+`--with-bladerf`, `--with-usrp1`, `--with-ipc`) and the MS side
+(`--with-mstrx`) were not built; see "Not covered".
 
-Documentation
--------------
+configure reports `whether g++ supports C++17 features with
+-std=gnu++17... yes` and prints an autoconf warning that C++17 "is not
+yet standardized", which comes from the age of the bundled macro and can
+be ignored.
 
-Doxygen-generated API documentation is generated during the build process, but
-also available online for each of the sub-libraries at User Manual for OsmoTRX
-can be generated during the build process, and is also available online at
-<https://ftp.osmocom.org/docs/latest/osmotrx-usermanual.pdf>.
+## SIMD on Apple Silicon
 
-Forum
------
+None. The build has two SIMD trees: `arch/x86` with SSE3 and SSE4.1
+kernels, selected by `ax_sse.m4` from `$host_cpu`, and `arch/arm` with
+NEON kernels, selected by `--with-neon`. The NEON kernels are ARMv7
+assembly (`vld1.32`, `vmul.f32`, `bx lr`, compiled with `-mfpu=neon`),
+which does not assemble for AArch64. So the build goes through
+`arch/x86` with no SSE conditionals set and uses the generic C
+convolution and conversion routines, autovectorised by clang. Patch 008
+is what makes that path link on macOS.
 
-We welcome any osmo-trx related discussions in the
-[Cellular Network Infrastructure -> 2 RAN (GERAN)](https://discourse.osmocom.org/c/cni/geran)
-section of the osmocom discourse (web based Forum).
+`show trx` and the startup log report the SIMD state; the
+`__builtin_cpu_supports` probe in configure answers "no" on arm64, so
+runtime detection is off as well. Throughput under a real BTS load was
+not measured; see "Not covered". Native AArch64 NEON intrinsics for the
+four kernels (convert, convolve, scale, mult) would be the next step if
+the generic path proves too slow.
 
-Mailing List
-------------
+## Running
 
-Discussions related to OsmoTRX are happening on the openbsc@lists.osmocom.org
-mailing list, please see <https://lists.osmocom.org/mailman/listinfo/openbsc>
-for subscription options and the list archive.
+The VTY listens on 127.0.0.1:4237, CTRL on 4236, and the transceiver
+protocol for osmo-bts-trx on UDP 5700 and up on the configured
+`bind-ip`.
 
-Please observe the [Osmocom Mailing List
-Rules](https://osmocom.org/projects/cellular-infrastructure/wiki/Mailing_List_Rules)
-when posting.
+```bash
+osmo-trx-uhd -C doc/examples/osmo-trx-uhd/osmo-trx-uhd.cfg
+```
 
-Issue Tracker
--------------
+Two things in the upstream example configuration do not apply here.
+The `cpu-sched` block (`policy rr 18`) is rejected, because the
+libosmocore port has no `cpu-sched` VTY node: the underlying
+`sched_setaffinity` and `sched_setscheduler` are Linux only. Remove the
+block, or on Darwin set a real-time policy by other means. And
+`clock-ref external` expects a 10 MHz reference on the device; use
+`internal` unless one is connected. The deprecated `rt-prio` option
+(patch 007) applies `SCHED_RR` to the main thread only on Darwin.
 
-We use the [issue tracker of the osmo-trx project on osmocom.org](https://osmocom.org/projects/osmotrx/issues) for
-tracking the state of bug reports and feature requests.  Feel free to submit any issues you may find, or help
-us out by resolving existing issues.
+Signals are handled through a pipe instead of `signalfd(2)` (patch
+006); SIGINT and SIGTERM shut the daemon down, SIGUSR1 and SIGUSR2 print
+talloc reports and SIGHUP reopens the logs, as on Linux.
 
-Contributing
-------------
+## Hardware check
 
-Our coding standards are described at
-<https://osmocom.org/projects/cellular-infrastructure/wiki/Coding_standards>
+The daemon was started against a LibreSDR B220 Mini (identifies as a
+B210, `WestBridge` FX3 on USB before firmware load). It comes up with 10
+threads, opens VTY and CTRL, prints its configuration and hands over to
+UHD, which loads the B200 firmware. In the session that produced this
+port the firmware load never returned: the device stayed in its
+pre-firmware `WestBridge` state and Ettus' own `uhd_usrp_probe` hung at
+the same line for 150 seconds, so the block is in the FX3 or the USB
+link and not in osmo-trx. The same UHD 4.10 build had opened the same
+unit four days earlier ("Detected Device: B210, Operating over USB 3")
+for srsRAN cell searches, so this is a device state that a power cycle
+clears, and the device open path of `osmo-trx-uhd` remains unverified
+here. Note that while UHD blocks in the device open, the daemon does not
+answer on the VTY and ignores SIGINT: the select loop that serves both
+starts only after the device is up.
 
-We use a Gerrit based patch submission/review process for managing contributions.
-Please see <https://osmocom.org/projects/cellular-infrastructure/wiki/Gerrit>
-for more details
+A full transceiver loop needs osmo-bts-trx, which is the next port in
+the series.
 
-The current patch queue for OsmoTRX can be seen at
-<https://gerrit.osmocom.org/q/project:osmo-trx+status:open>
+## Patches applied
+
+| Patch | Upstream file | Issue | Fix |
+|-------|---------------|-------|-----|
+| 001 | `configure.ac` | The UHD 4.10 public headers use `std::optional`, `std::is_same_v` and `std::is_arithmetic_v`; configure asks for gnu++11 and `UHDDevice.cpp` fails to compile | Require C++17 with the bundled `AX_CXX_COMPILE_STDCXX` macro; the sources compile unchanged |
+| 002 | `configure.ac` | The `uhd < 004.002` check that adds `-lboost_thread` reuses the `UHD` prefix of the first `PKG_CHECK_MODULES`, whose preset variables make it answer "yes" for every UHD version; on macOS the library is not on the link path and the build stops | Use `PKG_CHECK_EXISTS`, which asks pkg-config and sets nothing; the workaround still applies to libuhd < 4.2 |
+| 003 | `Transceiver52M/arch/common/Makefile.am` | `fft.c` is compiled without `FFTWF_CFLAGS`, so `fftw3.h` is only found when it sits in a default include directory | Add `$(FFTWF_CFLAGS)` to `AM_CFLAGS` |
+| 004 | 12 files under `Transceiver52M` | `<malloc.h>` and `memalign()` are glibc extensions; Darwin has neither | `<stdlib.h>` and `posix_memalign()` at the three aligned allocations, same 16 byte alignment |
+| 005 | `CommonLibs/Threads.cpp` | `pthread_setname_np()` takes the thread as first argument on Linux and only the name on Darwin | Call the Darwin form there; the function only ever names the calling thread |
+| 006 | `configure.ac`, `Transceiver52M/osmo-trx.cpp` | `signalfd(2)` is Linux only | Probe for `<sys/signalfd.h>`; without it, a handler writes the signal number into a pipe whose read end is registered with the select loop, so `sig_handler()` still runs from the main loop |
+| 007 | `Transceiver52M/osmo-trx.cpp` | `sched_setscheduler(2)` is Linux only | Keep it on Linux; elsewhere `pthread_setschedparam()` on the calling thread for the deprecated `rt-prio` option |
+| 008 | `Transceiver52M/arch/x86/Makefile.am` | `libarch_sse_3.la` and `libarch_sse_4_1.la` are declared unconditionally but get sources only under `HAVE_SSE3`/`HAVE_SSE4_1`; Apple `ar` refuses an archive with no members | Declare the two libraries inside the same conditionals as their sources |
+
+A ninth commit tracks `.tarball-version` with the upstream version so
+that `osmo-trx-uhd --version` reports 1.8.0 rather than the fork's tag.
+
+Patches 001 to 004 and 008 are portability fixes with no effect on
+GNU/Linux and are worth sending upstream; 001 and 002 also affect Linux
+hosts with a recent UHD. Patches 005 to 007 add Darwin branches.
+
+## Not covered
+
+No BTS was attached, so the transceiver protocol (CLOCK, CTRL, DATA
+sockets) was not exercised and no burst went through the signal
+processing chain under load. `osmo-bts-trx` comes next in the series.
+
+The MS side of the tree (`Transceiver52M/ms`, built with `--with-mstrx`)
+uses `eventfd(2)`, `cpu_set_t` and `pthread_attr_setaffinity_np`, all
+Linux only, and was not ported. The IPC backend links `-lrt`, which
+Darwin does not have, and was not built either. LimeSuite, bladeRF and
+USRP1 backends were not built for lack of hardware.
+
+## Dependency cascade
+
+Ports enabled by this repository:
+
+- osmo-bts-trx, which drives this transceiver over UDP
+
+## Prior ports in this series
+
+1. libosmocore-macos-arm64 v0.2.3
+2. libsctp-compat-macos-arm64 v0.3.1
+3. srsRAN-4G-macos-arm64 v0.1.0
+4. kraken-macos-arm64
+5. libosmo-netif-macos-arm64 v0.1.2
+6. libosmo-abis-macos-arm64 v0.1.1
+7. libosmo-sigtran-macos-arm64 v0.1.0
+8. osmo-hlr-macos-arm64 v0.1.0
+9. osmo-mgw-macos-arm64 v0.1.0
+10. libsmpp34-macos-arm64 v0.1.0
+11. osmo-msc-macos-arm64 v0.1.0
+12. osmo-bsc-macos-arm64 v0.1.0
+13. This repository
+
+## License
+
+As upstream, per `debian/copyright`: AGPL-3.0-or-later for osmo-trx,
+LGPL-2.1-or-later for `Transceiver52M/arch/arm/*`, GPL-3.0-or-later for
+`CommonLibs/Makefile.am`, the `config/ax_*.m4` macros and `debian/*`.
+The patches in this repository carry the license of the files they
+modify.
+
+## Credits
+
+Port developed by Andrei Gosman ([@agoarchitecture](https://linkedin.com/in/agoarchitecture))
+in collaboration with Claude Code CLI (Anthropic). All commits authored by
+Andrei; Claude assisted with pattern analysis, debugging, and iteration.
