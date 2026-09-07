@@ -49,7 +49,14 @@ void set_selfthread_name(const char *name)
 {
 	pthread_t selfid = pthread_self();
 	pid_t tid = osmo_gettid();
-	if (pthread_setname_np(selfid, name) == 0) {
+#ifdef __APPLE__
+	/* Darwin's pthread_setname_np() takes no thread argument and names
+	 * the calling thread, which is what this function does anyway. */
+	int rc = pthread_setname_np(name);
+#else
+	int rc = pthread_setname_np(selfid, name);
+#endif
+	if (rc == 0) {
 		LOG(INFO) << "Thread "<< selfid << " (task " << tid << ") set name: " << name;
 	} else {
 		char err_buf[256];
