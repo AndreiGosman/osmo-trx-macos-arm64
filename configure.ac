@@ -73,7 +73,7 @@ LT_INIT
 dnl Checks for header files.
 AC_HEADER_STDC
 dnl This is required for GnuRadio includes to understand endianness correctly:
-AC_CHECK_HEADERS([byteswap.h])
+AC_CHECK_HEADERS([byteswap.h sys/signalfd.h])
 
 dnl Checks for typedefs, structures, and compiler characteristics.
 AC_C_CONST

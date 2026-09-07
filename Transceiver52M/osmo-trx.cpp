@@ -36,7 +36,11 @@
 #include <string>
 #include <sstream>
 #include <iostream>
+#ifdef HAVE_SYS_SIGNALFD_H
 #include <sys/signalfd.h>
+#else
+#include <fcntl.h>
+#endif
 
 #include <GSMCommon.h>
 #include <Logger.h>
@@ -223,6 +227,7 @@ static void sig_handler(int signo)
 
 }
 
+#ifdef HAVE_SYS_SIGNALFD_H
 static int signalfd_callback(struct osmo_fd *ofd, unsigned int what)
 {
 	struct signalfd_siginfo fdsi;
@@ -237,14 +242,48 @@ static int signalfd_callback(struct osmo_fd *ofd, unsigned int what)
 	sig_handler(fdsi.ssi_signo);
 	return 0;
 }
+#else
+/* Systems without signalfd(2), such as Darwin and the BSDs: an
+ * asynchronous handler writes the signal number into a pipe and the
+ * select loop reads it back, so sig_handler() still runs from the main
+ * loop exactly as it does with signalfd. */
+static int signal_pipe[2] = { -1, -1 };
+
+static void signal_pipe_handler(int signo)
+{
+	int saved_errno = errno;
+	unsigned char b = signo;
+
+	if (write(signal_pipe[1], &b, 1) < 0) {
+		/* nothing can be done from inside a signal handler */
+	}
+	errno = saved_errno;
+}
+
+static int signal_pipe_callback(struct osmo_fd *ofd, unsigned int what)
+{
+	unsigned char b;
+	ssize_t s;
+
+	s = read(ofd->fd, &b, 1);
+	if (s < 0) {
+		LOG(FATAL) << "Failed to read from signal pipe ("<< ofd->fd << "): " << errno;
+		gshutdown = true;
+		return 0;
+	}
+	sig_handler(b);
+	return 0;
+}
+#endif
 
 static void setup_signal_handlers()
 {
-	sigset_t set;
-	int sfd;
-
 	signal(SIGABRT, &sig_handler);
 	osmo_init_ignore_signals();
+
+#ifdef HAVE_SYS_SIGNALFD_H
+	sigset_t set;
+	int sfd;
 
 	/* Other threads created by this thread (main) will inherit a copy of the
 	signal mask. */
@@ -265,6 +304,33 @@ static void setup_signal_handlers()
 	}
 
 	osmo_fd_setup(&signal_ofd, sfd, OSMO_FD_READ, signalfd_callback, NULL, 0);
+#else
+	static const int signals[] = { SIGINT, SIGTERM, SIGUSR1, SIGUSR2, SIGHUP };
+	struct sigaction sa;
+	unsigned int i;
+
+	if (pipe(signal_pipe) < 0) {
+		fprintf(stderr, "pipe() failed (%d).\n", errno);
+		exit(EXIT_FAILURE);
+	}
+	for (i = 0; i < 2; i++) {
+		fcntl(signal_pipe[i], F_SETFD, FD_CLOEXEC);
+		fcntl(signal_pipe[i], F_SETFL, fcntl(signal_pipe[i], F_GETFL) | O_NONBLOCK);
+	}
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = signal_pipe_handler;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = SA_RESTART;
+	for (i = 0; i < sizeof(signals) / sizeof(signals[0]); i++) {
+		if (sigaction(signals[i], &sa, NULL) < 0) {
+			fprintf(stderr, "sigaction(%d) failed (%d).\n", signals[i], errno);
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	osmo_fd_setup(&signal_ofd, signal_pipe[0], OSMO_FD_READ, signal_pipe_callback, NULL, 0);
+#endif
 	if (osmo_fd_register(&signal_ofd) < 0) {
 		fprintf(stderr, "osmo_fd_register() failed.\n");
 		exit(EXIT_FAILURE);
@@ -720,6 +786,9 @@ int main(int argc, char *argv[])
 
 	osmo_fd_unregister(&signal_ofd);
 	osmo_fd_close(&signal_ofd);
+#ifndef HAVE_SYS_SIGNALFD_H
+	close(signal_pipe[1]);
+#endif
 	osmo_signal_unregister_handler(SS_MAIN, transc_sig_cb, NULL);
 	return 0;
 }
