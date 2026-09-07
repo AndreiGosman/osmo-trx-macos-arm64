@@ -95,20 +95,24 @@ talloc reports and SIGHUP reopens the logs, as on Linux.
 
 ## Hardware check
 
-The daemon was started against a LibreSDR B220 Mini (identifies as a
-B210, `WestBridge` FX3 on USB before firmware load). It comes up with 10
-threads, opens VTY and CTRL, prints its configuration and hands over to
-UHD, which loads the B200 firmware. In the session that produced this
-port the firmware load never returned: the device stayed in its
-pre-firmware `WestBridge` state and Ettus' own `uhd_usrp_probe` hung at
-the same line for 150 seconds, so the block is in the FX3 or the USB
-link and not in osmo-trx. The same UHD 4.10 build had opened the same
-unit four days earlier ("Detected Device: B210, Operating over USB 3")
-for srsRAN cell searches, so this is a device state that a power cycle
-clears, and the device open path of `osmo-trx-uhd` remains unverified
-here. Note that while UHD blocks in the device open, the daemon does not
-answer on the VTY and ignores SIGINT: the select loop that serves both
-starts only after the device is up.
+Checked against a LibreSDR B220 Mini (serial MAE8DOY, identifies as a
+B210) with dummy loads on both TRX ports, using a configuration without
+the `cpu-sched` block and with `clock-ref internal`. The daemon comes up
+with 10 threads, opens VTY and CTRL, and UHD discovers and initialises
+the device: `Detected Device: B210`, `Operating over USB 3`, both
+register loopback tests pass, the master clock is set to 26 MHz, the
+rates are configured for 4 SPS, gain ranges are read (Tx 0 to 89.75 dB,
+Rx 0 to 76 dB) and the log ends with `Transceiver active with 1
+channel(s)`. `show trx` on the VTY reports the configuration, and SIGINT
+shuts the daemon down cleanly with exit code 0, which exercises the
+signal pipe of patch 006.
+
+One caveat for anyone repeating this: while UHD is inside the device
+open the daemon does not answer on the VTY and ignores SIGINT, because
+the select loop that serves both starts only after the device is up. A
+device that hangs in the FX3 firmware load (it then shows on USB as
+`WestBridge` 0x2500:0x0020) blocks `uhd_usrp_probe` the same way, and a
+replug clears it.
 
 A full transceiver loop needs osmo-bts-trx, which is the next port in
 the series.
@@ -136,8 +140,9 @@ hosts with a recent UHD. Patches 005 to 007 add Darwin branches.
 ## Not covered
 
 No BTS was attached, so the transceiver protocol (CLOCK, CTRL, DATA
-sockets) was not exercised and no burst went through the signal
-processing chain under load. `osmo-bts-trx` comes next in the series.
+sockets) was not exercised, no POWERON was issued and no burst went
+through the signal processing chain under load; the device was opened
+and configured but not streamed. `osmo-bts-trx` comes next in the series.
 
 The MS side of the tree (`Transceiver52M/ms`, built with `--with-mstrx`)
 uses `eventfd(2)`, `cpu_set_t` and `pthread_attr_setaffinity_np`, all
